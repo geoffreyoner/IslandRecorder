@@ -135,7 +135,7 @@ dependencies {
     // Miuix UI
     implementation(libs.miuix.core)
     implementation(libs.miuix.ui)
-    implementation(libs.miuix.shader)
+    implementation(libs.miuix.material)
     implementation(libs.miuix.blur)
     implementation(libs.miuix.preference)
     implementation(libs.miuix.icons)
