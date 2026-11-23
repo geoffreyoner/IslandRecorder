@@ -73,21 +73,26 @@ class RecordingNotificationManager(
         durationMs: Long,
         tileStyle: TileStyle,
         isPaused: Boolean = false,
-        bypass: Boolean = false
+        bypass: Boolean = false,
+        countdownEndsAtMs: Long? = null
     ): Notification {
         val formattedDuration = formatDuration(durationMs)
+        val countdownText = countdownEndsAtMs?.let {
+            context.getString(R.string.notification_recording_countdown)
+        }
         val payload = RecordingNotificationPayload(
             durationMs = durationMs,
             isPaused = isPaused,
             tileStyle = tileStyle,
-            title = context.getString(
+            title = countdownText ?: context.getString(
                 if (isPaused) R.string.notification_paused_title else R.string.notification_recording_title,
                 formattedDuration
             ),
-            contentText = context.getString(
+            contentText = countdownText ?: context.getString(
                 if (isPaused) R.string.notification_paused_message else R.string.notification_recording_message
             ),
-            bypassSuperIslandRestriction = bypass
+            bypassSuperIslandRestriction = bypass,
+            countdownEndsAtMs = countdownEndsAtMs
         )
         val actions = createActions(payload)
         return buildNotification(payload, actions)
@@ -172,14 +177,19 @@ class RecordingNotificationManager(
             .setWhen(payload.timerWhen)
             .setShowWhen(true)
             .setUsesChronometer(!payload.isPaused)
+            .setChronometerCountDown(payload.isCountingDown)
             .setPriority(NotificationCompat.PRIORITY_LOW)
             .setCategory(NotificationCompat.CATEGORY_SERVICE)
-            .addAction(
+        if (payload.isCountingDown) {
+            builder.setForegroundServiceBehavior(NotificationCompat.FOREGROUND_SERVICE_IMMEDIATE)
+        } else {
+            builder.addAction(
                 actions.pauseResumeIconRes,
                 actions.pauseResumeTitle,
                 actions.pauseResume
             )
-            .addAction(R.drawable.ic_stop, context.getString(R.string.action_stop), actions.stop)
+        }
+        builder.addAction(R.drawable.ic_stop, actions.stopTitle, actions.stop)
 
         return builder.build().apply {
             extras.putAll(buildSuperIslandExtras(payload, actions))
@@ -222,6 +232,9 @@ class RecordingNotificationManager(
             content = contentPendingIntent,
             pauseResume = pauseResumePendingIntent,
             stop = stopPendingIntent,
+            stopTitle = context.getString(
+                if (payload.isCountingDown) R.string.cancel else R.string.action_stop
+            ),
             pauseResumeTitle = context.getString(
                 if (payload.isPaused) R.string.action_resume else R.string.action_pause
             ),
@@ -235,10 +248,22 @@ class RecordingNotificationManager(
     ): Bundle {
         val timerInfo = JSONObject().apply {
             put("timerWhen", payload.timerWhen)
-            put("timerType", if (payload.isPaused) 2 else 1)
+            put(
+                "timerType",
+                when {
+                    payload.isCountingDown -> -1
+                    payload.isPaused -> 2
+                    else -> 1
+                }
+            )
             put("timerSystemCurrent", payload.now)
         }
         val tickerIconKey = "miui.focus.pic_ticker"
+        val islandTitle = if (payload.isCountingDown) {
+            context.getString(R.string.notification_recording_countdown_island)
+        } else {
+            null
+        }
         val pauseIconKey = if (payload.isPaused) {
             "miui.focus.pic_resume"
         } else {
@@ -267,7 +292,7 @@ class RecordingNotificationManager(
                     put("ticker", payload.contentText)
                     put("tickerPic", tickerIconKey)
                     put("tickerPicDark", tickerIconKey)
-                    put("param_island", buildSuperIslandArea(timerInfo, tickerIconKey))
+                    put("param_island", buildSuperIslandArea(timerInfo, tickerIconKey, islandTitle))
                     put(
                         "animTextInfo",
                         buildSuperIslandTimerAnimation(timerInfo, tickerIconKey, payload)
@@ -275,15 +300,17 @@ class RecordingNotificationManager(
                     put(
                         "actions",
                         JSONArray().apply {
-                            put(
-                                JSONObject().apply {
-                                    put("actionIntentType", 0)
-                                    put("action", "miui.focus.action_1")
-                                    put("type", 0)
-                                    put("actionIcon", pauseIconKey)
-                                    put("actionIconDark", pauseIconDarkKey)
-                                }
-                            )
+                            if (!payload.isCountingDown) {
+                                put(
+                                    JSONObject().apply {
+                                        put("actionIntentType", 0)
+                                        put("action", "miui.focus.action_1")
+                                        put("type", 0)
+                                        put("actionIcon", pauseIconKey)
+                                        put("actionIconDark", pauseIconDarkKey)
+                                    }
+                                )
+                            }
                             put(
                                 JSONObject().apply {
                                     put("actionIntentType", 0)
@@ -301,12 +328,16 @@ class RecordingNotificationManager(
 
         return Bundle().apply {
             putString("miui.focus.param", focusParam.toString())
-            putBundle("miui.focus.actions", buildSuperIslandActions(actions))
+            putBundle("miui.focus.actions", buildSuperIslandActions(actions, payload.isCountingDown))
             putBundle("miui.focus.pics", buildSuperIslandPictures(payload.tileStyle))
         }
     }
 
-    private fun buildSuperIslandArea(timerInfo: JSONObject, tickerIconKey: String): JSONObject =
+    private fun buildSuperIslandArea(
+        timerInfo: JSONObject,
+        tickerIconKey: String,
+        title: String?
+    ): JSONObject =
         JSONObject().apply {
             put("islandPriority", 1)
             put("islandTimeout", 43200)
@@ -326,6 +357,9 @@ class RecordingNotificationManager(
                                     put("pic", tickerIconKey)
                                 }
                             )
+                            if (title != null) {
+                                put("textInfo", JSONObject().put("title", title))
+                            }
                         }
                     )
                     put(
@@ -363,8 +397,9 @@ class RecordingNotificationManager(
                     put("type", 1)
                     put("src", "voiceWaveBig")
                     put("number", 0)
-                    put("loop", !payload.isPaused)
-                    put("autoplay", !payload.isPaused)
+                    val animate = !payload.isPaused && !payload.isCountingDown
+                    put("loop", animate)
+                    put("autoplay", animate)
                 }
             )
             put(
@@ -376,22 +411,20 @@ class RecordingNotificationManager(
             )
         }
 
-    private fun buildSuperIslandActions(actions: RecordingNotificationActions): Bundle {
-        val pauseResumeAction = Notification.Action.Builder(
-            null,
-            actions.pauseResumeTitle,
-            actions.pauseResume
-        ).build()
-        val stopAction = Notification.Action.Builder(
-            null,
-            context.getString(R.string.action_stop),
-            actions.stop
-        ).build()
-
-        return Bundle().apply {
+    private fun buildSuperIslandActions(
+        actions: RecordingNotificationActions,
+        isCountingDown: Boolean
+    ): Bundle = Bundle().apply {
+        if (!isCountingDown) {
+            val pauseResumeAction = Notification.Action.Builder(
+                null,
+                actions.pauseResumeTitle,
+                actions.pauseResume
+            ).build()
             putParcelable("miui.focus.action_1", pauseResumeAction)
-            putParcelable("miui.focus.action_2", stopAction)
         }
+        val stopAction = Notification.Action.Builder(null, actions.stopTitle, actions.stop).build()
+        putParcelable("miui.focus.action_2", stopAction)
     }
 
     private fun buildSuperIslandPictures(tileStyle: TileStyle): Bundle =
@@ -501,16 +534,19 @@ class RecordingNotificationManager(
         val tileStyle: TileStyle,
         val title: String,
         val contentText: String,
-        val bypassSuperIslandRestriction: Boolean
+        val bypassSuperIslandRestriction: Boolean,
+        val countdownEndsAtMs: Long?
     ) {
         val now: Long = System.currentTimeMillis()
-        val timerWhen: Long = now - durationMs
+        val isCountingDown: Boolean = countdownEndsAtMs != null
+        val timerWhen: Long = countdownEndsAtMs ?: (now - durationMs)
     }
 
     private data class RecordingNotificationActions(
         val content: PendingIntent,
         val pauseResume: PendingIntent,
         val stop: PendingIntent,
+        val stopTitle: String,
         val pauseResumeTitle: String,
         val pauseResumeIconRes: Int
     )

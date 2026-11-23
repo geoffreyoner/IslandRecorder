@@ -1,5 +1,6 @@
 package com.island.recorder.ui.activity
 
+import android.Manifest
 import android.content.Intent
 import android.media.projection.MediaProjectionManager
 import android.os.Bundle
@@ -80,7 +81,19 @@ class RecordingShortcutActivity : ComponentActivity() {
     private val appScope: CoroutineScope by inject()
     private val rootProcessSession: RecordingRootProcessSession by inject()
     private var rootProcessSessionOwner = 0L
+    private var projectionRequested = false
+    private var startWithCountdown = false
     private lateinit var permissionRequester: PermissionRequester
+
+    private val countdownPermissionsLauncher = registerForActivityResult(
+        ActivityResultContracts.RequestMultiplePermissions()
+    ) { results ->
+        if (results.isNotEmpty() && results.values.all { it }) {
+            startRecording()
+        } else {
+            finish()
+        }
+    }
 
     private val mediaProjectionLauncher = registerForActivityResult(
         ActivityResultContracts.StartActivityForResult()
@@ -88,12 +101,17 @@ class RecordingShortcutActivity : ComponentActivity() {
         if (result.resultCode == RESULT_OK && result.data != null) {
             lifecycleScope.launch {
                 val settings = appSettingsRepo.recordingSettingsFlow.first()
+                if (RecorderService.recordingState.value !is RecordingState.Idle) {
+                    finish()
+                    return@launch
+                }
                 val intent =
                     Intent(this@RecordingShortcutActivity, RecorderService::class.java).apply {
                         action = RecorderService.ACTION_START_RECORDING
                         putExtra(RecorderService.EXTRA_RESULT_CODE, result.resultCode)
                         putExtra(RecorderService.EXTRA_RESULT_DATA, result.data)
                         putExtra(RecorderService.EXTRA_SETTINGS, settings)
+                        putExtra(RecorderService.EXTRA_START_WITH_COUNTDOWN, startWithCountdown)
                     }
                 if (appSettingsRepo.currentPreferences.authorizer == Authorizer.Root) {
                     withContext(Dispatchers.IO) {
@@ -121,11 +139,13 @@ class RecordingShortcutActivity : ComponentActivity() {
             val settings = appSettingsRepo.recordingSettingsFlow.first()
             if (!hasPostNotificationsPermission()) {
                 Timber.w("Post notifications permission is required")
+                if (startWithCountdown) finish()
                 return@launch
             }
             if (settings.audioSource.usesMicrophone() && !hasRecordAudioPermission()) {
                 Timber
                     .w("Record audio permission is required for ${settings.audioSource}")
+                if (startWithCountdown) finish()
                 return@launch
             }
             launchMediaProjection()
@@ -133,6 +153,8 @@ class RecordingShortcutActivity : ComponentActivity() {
     }
 
     private fun launchMediaProjection() {
+        if (projectionRequested) return
+        projectionRequested = true
         val manager = getSystemService(MEDIA_PROJECTION_SERVICE) as MediaProjectionManager
         mediaProjectionLauncher.launch(manager.createScreenCaptureIntent())
     }
@@ -149,19 +171,44 @@ class RecordingShortcutActivity : ComponentActivity() {
             ?.takeIf { it != 0L }
             ?: rootProcessSession.newShortcutOwner()
         permissionRequester = PermissionRequester(this, permissionChecker)
+        projectionRequested = savedInstanceState?.getBoolean(PROJECTION_REQUESTED_KEY) == true
+        startWithCountdown = savedInstanceState?.getBoolean(START_WITH_COUNTDOWN_KEY) == true
 
         if (RecorderService.recordingState.value !is RecordingState.Idle) {
             finish()
             return
         }
 
-        lifecycleScope.launch(Dispatchers.IO) {
+        if (projectionRequested || startWithCountdown) return
+
+        lifecycleScope.launch {
             val preferences = appSettingsRepo.preferencesFlow.first()
             if (preferences.authorizer == Authorizer.Root) {
-                rootProcessSession.warmUpForShortcut(rootProcessSessionOwner)
+                launch(Dispatchers.IO) {
+                    rootProcessSession.warmUpForShortcut(rootProcessSessionOwner)
+                }
+            }
+            val settings = preferences.recordingSettings
+            if (settings.skipStartConfirmation) {
+                startWithCountdown = true
+                val missingPermissions = buildList {
+                    if (!hasPostNotificationsPermission()) add(Manifest.permission.POST_NOTIFICATIONS)
+                    if (settings.audioSource.usesMicrophone() && !hasRecordAudioPermission()) {
+                        add(Manifest.permission.RECORD_AUDIO)
+                    }
+                }
+                if (missingPermissions.isEmpty()) {
+                    launchMediaProjection()
+                } else {
+                    countdownPermissionsLauncher.launch(missingPermissions.toTypedArray())
+                }
+            } else {
+                showRecordingDialog()
             }
         }
+    }
 
+    private fun showRecordingDialog() {
         var hasRecordAudioPermissionState by mutableStateOf(hasRecordAudioPermission())
         var hasPostNotificationsPermissionState by mutableStateOf(hasPostNotificationsPermission())
         if (!hasRecordAudioPermissionState || !hasPostNotificationsPermissionState) {
@@ -444,11 +491,15 @@ class RecordingShortcutActivity : ComponentActivity() {
 
     override fun onSaveInstanceState(outState: Bundle) {
         outState.putLong(ROOT_SESSION_OWNER_KEY, rootProcessSessionOwner)
+        outState.putBoolean(PROJECTION_REQUESTED_KEY, projectionRequested)
+        outState.putBoolean(START_WITH_COUNTDOWN_KEY, startWithCountdown)
         super.onSaveInstanceState(outState)
     }
 
     private companion object {
         private const val ROOT_SESSION_OWNER_KEY = "root_session_owner"
+        private const val PROJECTION_REQUESTED_KEY = "projection_requested"
+        private const val START_WITH_COUNTDOWN_KEY = "start_with_countdown"
         val DialogContentHorizontalPadding = 24.dp
         val DialogContentVerticalPadding = 24.dp
     }

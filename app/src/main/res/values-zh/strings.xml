@@ -55,6 +55,8 @@
     <string name="video_codec_summary">H.265 支持 HDR 且更高效</string>
     <string name="show_touches">显示点按操作反馈</string>
     <string name="show_touches_summary">显示点按操作的视觉反馈</string>
+    <string name="skip_start_confirmation">跳过录屏确认</string>
+    <string name="skip_start_confirmation_summary">跳过应用内确认框，倒计时 3 秒后开始录制</string>
     <string name="stop_on_lock_screen">锁屏时停止录制</string>
     <string name="stop_on_lock_screen_summary">屏幕锁定后自动停止当前录制</string>
     <string name="bypass_screen_share_protection">绕过小米屏幕共享保护</string>
@@ -133,6 +135,8 @@
     <string name="notification_channel_name">录制服务</string>
     <string name="notification_channel_desc">显示录制状态</string>
     <string name="notification_recording_title">正在录制 · %s</string>
+    <string name="notification_recording_countdown">即将开始录制</string>
+    <string name="notification_recording_countdown_island">即将录屏</string>
     <string name="notification_recording_message">正在录制屏幕…</string>
     <string name="notification_paused_title">已暂停 · %s</string>
     <string name="notification_paused_message">点击继续</string>

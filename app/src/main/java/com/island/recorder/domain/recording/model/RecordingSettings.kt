@@ -119,7 +119,8 @@ data class RecordingSettings(
     val stopOnLockScreen: Boolean = false,
     val bypassScreenShareProtection: Boolean = true,
     val bypassFocusIsland: Boolean = false,
-    val tileStyle: TileStyle = TileStyle.DEFAULT
+    val tileStyle: TileStyle = TileStyle.DEFAULT,
+    val skipStartConfirmation: Boolean = false
 ) : Parcelable {
     /**
      * Calculate bitrate: fixed value if user chose one, otherwise auto-compute

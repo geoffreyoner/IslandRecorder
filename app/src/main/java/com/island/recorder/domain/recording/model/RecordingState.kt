@@ -8,6 +8,9 @@ sealed class RecordingState {
      * No recording in progress
      */
     data object Idle : RecordingState()
+
+    /** Waiting before starting screen capture. */
+    data object Countdown : RecordingState()
     
     /**
      * Recording is in progress

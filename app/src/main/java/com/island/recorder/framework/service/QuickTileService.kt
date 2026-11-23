@@ -37,6 +37,7 @@ class QuickTileService : TileService() {
             ) { recordingState, settings ->
                 TileSnapshot(
                     isRecording = recordingState.isRecordingTileState(),
+                    isCountingDown = recordingState == RecordingState.Countdown,
                     tileStyle = settings.tileStyle
                 )
             }.distinctUntilChanged().collect { snapshot ->
@@ -63,7 +64,7 @@ class QuickTileService : TileService() {
         val state = RecorderService.recordingState.value
 
         when (state) {
-            is RecordingState.Recording, is RecordingState.Paused -> {
+            RecordingState.Countdown, is RecordingState.Recording, is RecordingState.Paused -> {
                 Timber.d("Quick tile clicked - stopping recording")
                 val intent = Intent(this, RecorderService::class.java).apply {
                     action = RecorderService.ACTION_STOP_RECORDING
@@ -71,11 +72,11 @@ class QuickTileService : TileService() {
                 startService(intent)
             }
 
-            is RecordingState.Stopping -> {
-                Timber.d("Quick tile clicked while recording cleanup is in progress")
+            is RecordingState.Processing, RecordingState.Stopping, is RecordingState.Error -> {
+                Timber.d("Quick tile clicked while recorder is busy")
             }
 
-            else -> {
+            RecordingState.Idle -> {
                 Timber.d("Quick tile clicked - launching shortcut for recording")
                 val intent = Intent(this, RecordingShortcutActivity::class.java).apply {
                     flags = Intent.FLAG_ACTIVITY_NEW_TASK
@@ -98,8 +99,13 @@ class QuickTileService : TileService() {
 
         qsTile?.apply {
             state = if (snapshot.isRecording) Tile.STATE_ACTIVE else Tile.STATE_INACTIVE
-            label =
-                if (snapshot.isRecording) getString(R.string.tile_stop_recording) else getString(R.string.tile_start_recording)
+            label = getString(
+                when {
+                    snapshot.isCountingDown -> R.string.cancel
+                    snapshot.isRecording -> R.string.tile_stop_recording
+                    else -> R.string.tile_start_recording
+                }
+            )
             icon = Icon.createWithResource(this@QuickTileService, iconRes)
             updateTile()
         }
@@ -108,10 +114,12 @@ class QuickTileService : TileService() {
     private fun RecordingState.isRecordingTileState(): Boolean =
         this is RecordingState.Recording ||
                 this is RecordingState.Paused ||
-                this is RecordingState.Stopping
+                this == RecordingState.Stopping ||
+                this == RecordingState.Countdown
 
     private data class TileSnapshot(
         val isRecording: Boolean,
+        val isCountingDown: Boolean,
         val tileStyle: TileStyle
     )
 }

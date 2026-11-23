@@ -129,9 +129,11 @@ class RecorderService : Service() {
         const val EXTRA_RESULT_CODE = "result_code"
         const val EXTRA_RESULT_DATA = "result_data"
         const val EXTRA_SETTINGS = "settings"
+        const val EXTRA_START_WITH_COUNTDOWN = "start_with_countdown"
         const val DIAGNOSTIC_FPS_TAG = "IR-Fps"
         const val STARTUP_TIMING_TAG = "IR-Startup"
         const val VIDEO_FPS_LOG_WINDOW_US = 2_000_000L
+        private const val START_COUNTDOWN_MS = 3_000L
 
         private val _recordingState = MutableStateFlow<RecordingState>(RecordingState.Idle)
         val recordingState: StateFlow<RecordingState> = _recordingState.asStateFlow()
@@ -162,7 +164,12 @@ class RecorderService : Service() {
                     intent.getParcelableExtra(EXTRA_SETTINGS, RecordingSettings::class.java)
 
                 if (resultData != null && settings != null) {
-                    startRecording(resultCode, resultData, settings)
+                    startRecording(
+                        resultCode,
+                        resultData,
+                        settings,
+                        intent.getBooleanExtra(EXTRA_START_WITH_COUNTDOWN, false)
+                    )
                 } else {
                     appScope.launch(Dispatchers.IO) {
                         rootProcessSession.releaseRecorderService()
@@ -183,7 +190,12 @@ class RecorderService : Service() {
         return binder
     }
 
-    private fun startRecording(resultCode: Int, data: Intent, settings: RecordingSettings) {
+    private fun startRecording(
+        resultCode: Int,
+        data: Intent,
+        settings: RecordingSettings,
+        startWithCountdown: Boolean
+    ) {
         val startupStartElapsedMs = SystemClock.elapsedRealtime()
         var lastStartupMarkElapsedMs = startupStartElapsedMs
         startupTraceStartElapsedMs = startupStartElapsedMs
@@ -219,18 +231,16 @@ class RecorderService : Service() {
         currentSettings = settings
         stopOnLockScreen = settings.stopOnLockScreen
 
-        // Show processing state immediately for responsive UI
-        _recordingState.value = RecordingState.Processing(0)
-        logStartupStep("state set Processing")
+        _recordingState.value = if (startWithCountdown) {
+            RecordingState.Countdown
+        } else {
+            RecordingState.Processing(0)
+        }
+        requestTileRefresh(this)
 
+        var countdownDeadline: Long? = null
         try {
             // Start foreground service (must happen on main thread)
-            val notification = recordingNotificationManager.createRecordingNotification(
-                0L,
-                tileStyle = settings.tileStyle,
-                bypass = settings.bypassFocusIsland
-            )
-            logStartupStep("notification created")
             var foregroundServiceType = ServiceInfo.FOREGROUND_SERVICE_TYPE_MEDIA_PROJECTION
             if (settings.audioSource.usesMicrophone()) {
                 foregroundServiceType =
@@ -239,6 +249,22 @@ class RecorderService : Service() {
             recordingNotificationManager.runWithSuperIslandBypass(
                 bypass = settings.bypassFocusIsland
             ) {
+                countdownDeadline = if (startWithCountdown) {
+                    SystemClock.elapsedRealtime() + START_COUNTDOWN_MS
+                } else {
+                    null
+                }
+                val notification = recordingNotificationManager.createRecordingNotification(
+                    0L,
+                    tileStyle = settings.tileStyle,
+                    bypass = settings.bypassFocusIsland,
+                    countdownEndsAtMs = if (startWithCountdown) {
+                        System.currentTimeMillis() + START_COUNTDOWN_MS
+                    } else {
+                        null
+                    }
+                )
+                logStartupStep("notification created")
                 startForeground(
                     RecordingNotificationManager.NOTIFICATION_ID,
                     notification,
@@ -270,6 +296,20 @@ class RecorderService : Service() {
         // Heavy initialization in background
         startJob = serviceScope.launch(Dispatchers.Default) {
             try {
+                countdownDeadline?.let { deadline ->
+                    delay((deadline - SystemClock.elapsedRealtime()).coerceAtLeast(0L))
+                    val canStart = withContext(Dispatchers.Main) {
+                        if (_recordingState.value != RecordingState.Countdown) {
+                            false
+                        } else {
+                            _recordingState.value = RecordingState.Processing(0)
+                            requestTileRefresh(this@RecorderService)
+                            true
+                        }
+                    }
+                    if (!canStart) return@launch
+                    logStartupStep("countdown completed")
+                }
                 if (privilegedOperations.usesPersistentScreenShareProtectionBypass) {
                     // The OS4 switch is the actual AppOp, independent of the legacy DataStore setting.
                     val bypassed = withContext(Dispatchers.IO) {
@@ -1031,7 +1071,10 @@ class RecorderService : Service() {
 
     private fun stopRecordingOnLockScreen(reason: String) {
         val state = _recordingState.value
-        if (!stopOnLockScreen || state !is RecordingState.Recording && state !is RecordingState.Paused) {
+        if (!stopOnLockScreen) return
+        if (state !is RecordingState.Recording && state !is RecordingState.Paused &&
+            state != RecordingState.Countdown
+        ) {
             return
         }
         Timber.i("Stopping recording because lock screen was detected: $reason")

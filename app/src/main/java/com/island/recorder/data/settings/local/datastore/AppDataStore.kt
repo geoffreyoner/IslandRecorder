@@ -18,6 +18,8 @@ class AppDataStore(
         val AUDIO_SOURCE: Preferences.Key<String> = stringPreferencesKey("audio_source")
         val VIDEO_CODEC: Preferences.Key<String> = stringPreferencesKey("video_codec")
         val SHOW_TOUCHES: Preferences.Key<Boolean> = booleanPreferencesKey("show_touches")
+        val SKIP_START_CONFIRMATION: Preferences.Key<Boolean> =
+            booleanPreferencesKey("skip_start_confirmation")
         val STOP_ON_LOCK_SCREEN: Preferences.Key<Boolean> =
             booleanPreferencesKey("stop_on_lock_screen")
         val BYPASS_SCREEN_SHARE_PROTECTION: Preferences.Key<Boolean> =

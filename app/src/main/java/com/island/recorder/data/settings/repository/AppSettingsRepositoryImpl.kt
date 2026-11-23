@@ -96,7 +96,8 @@ class AppSettingsRepositoryImpl(
                 bypassScreenShareProtection =
                     prefs[AppDataStore.BYPASS_SCREEN_SHARE_PROTECTION] ?: true,
                 bypassFocusIsland = prefs[AppDataStore.BYPASS_FOCUS_ISLAND] ?: false,
-                tileStyle = safeValueOf(prefs[AppDataStore.TILE_STYLE], TileStyle.DEFAULT)
+                tileStyle = safeValueOf(prefs[AppDataStore.TILE_STYLE], TileStyle.DEFAULT),
+                skipStartConfirmation = prefs[AppDataStore.SKIP_START_CONFIRMATION] ?: false
             ),
             storageTreeUri = prefs[AppDataStore.STORAGE_TREE_URI]
                 ?: SafRecordingStorageProviderImpl.DEFAULT_STORAGE_TREE_URI,
@@ -170,6 +171,10 @@ class AppSettingsRepositoryImpl(
                 recordingSettings = preferences.recordingSettings.copy(showTouches = value)
             )
 
+            BooleanSetting.SkipStartConfirmation -> preferences.copy(
+                recordingSettings = preferences.recordingSettings.copy(skipStartConfirmation = value)
+            )
+
             BooleanSetting.StopOnLockScreen -> preferences.copy(
                 recordingSettings = preferences.recordingSettings.copy(stopOnLockScreen = value)
             )
@@ -205,6 +210,7 @@ class AppSettingsRepositoryImpl(
     private fun booleanKey(setting: BooleanSetting): Preferences.Key<Boolean> =
         when (setting) {
             BooleanSetting.ShowTouches -> AppDataStore.SHOW_TOUCHES
+            BooleanSetting.SkipStartConfirmation -> AppDataStore.SKIP_START_CONFIRMATION
             BooleanSetting.StopOnLockScreen -> AppDataStore.STOP_ON_LOCK_SCREEN
             BooleanSetting.BypassScreenShareProtection ->
                 AppDataStore.BYPASS_SCREEN_SHARE_PROTECTION

@@ -420,6 +420,16 @@ fun SettingsPage(
                         }
                     )
                     SwitchPreference(
+                        title = stringResource(R.string.skip_start_confirmation),
+                        summary = stringResource(R.string.skip_start_confirmation_summary),
+                        checked = currentSettings.skipStartConfirmation,
+                        onCheckedChange = { checked ->
+                            scope.launch {
+                                appSettingsRepo.putBoolean(BooleanSetting.SkipStartConfirmation, checked)
+                            }
+                        }
+                    )
+                    SwitchPreference(
                         title = stringResource(R.string.stop_on_lock_screen),
                         summary = stringResource(R.string.stop_on_lock_screen_summary),
                         checked = currentSettings.stopOnLockScreen,
