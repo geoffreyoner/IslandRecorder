@@ -41,7 +41,7 @@ jobs:
         run: |
           echo "${{ secrets.SIGNING_KEY }}" | base64 -d > /tmp/keystore.jks
           BUILD_TOOLS=$(ls -d $ANDROID_HOME/build-tools/*/ | sort -V | tail -1)
-          UNSIGNED_APK=$(find app/build/outputs/apk/release -name '*-unsigned.apk' | head -1)
+          UNSIGNED_APK=$(find app/build/outputs/apk -path '*/release/*-unsigned.apk' | head -1)
           
           # 统一输出到当前目录，消除深层路径干扰
           ${BUILD_TOOLS}zipalign -f 4 "$UNSIGNED_APK" ./release.apk
@@ -56,7 +56,7 @@ jobs:
 
       - name: Prepare Debug APK
         run: |
-          DEBUG_RAW=$(find app/build/outputs/apk/debug -name '*.apk' | head -1)
+          DEBUG_RAW=$(find app/build/outputs/apk -path '*/debug/*.apk' | head -1)
           cp "$DEBUG_RAW" ./debug.apk
 
       # =======================================================
