@@ -49,6 +49,7 @@ import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+import kotlinx.coroutines.withTimeoutOrNull
 import kotlinx.coroutines.yield
 import org.koin.android.ext.android.get
 import org.koin.android.ext.android.inject
@@ -134,6 +135,8 @@ class RecorderService : Service() {
         const val STARTUP_TIMING_TAG = "IR-Startup"
         const val VIDEO_FPS_LOG_WINDOW_US = 2_000_000L
         private const val START_COUNTDOWN_MS = 3_000L
+        private const val EOS_DRAIN_TIMEOUT_MS = 1_000L
+        private const val RECORDING_JOB_GRACE_MS = 1_500L
 
         private val _recordingState = MutableStateFlow<RecordingState>(RecordingState.Idle)
         val recordingState: StateFlow<RecordingState> = _recordingState.asStateFlow()
@@ -557,6 +560,9 @@ class RecorderService : Service() {
         var waitingForFirstVideoKeyFrame = true
         var lastSyncFrameRequestElapsedMs = 0L
         var lastDurationUpdateElapsedMs = 0L
+        var endOfStreamSignaled = false
+        var endOfStreamDrained = false
+        var endOfStreamDeadlineElapsedMs = 0L
 
         fun updateRecordingDuration(force: Boolean = false) {
             val now = SystemClock.elapsedRealtime()
@@ -578,7 +584,22 @@ class RecorderService : Service() {
 
         while (currentCoroutineContext().isActive) {
             val state = _recordingState.value
-            if (state !is RecordingState.Recording && state !is RecordingState.Paused) break
+            if (state is RecordingState.Stopping) {
+                val encoder = videoEncoder ?: break
+                if (!endOfStreamSignaled) {
+                    endOfStreamSignaled = true
+                    endOfStreamDeadlineElapsedMs =
+                        SystemClock.elapsedRealtime() + EOS_DRAIN_TIMEOUT_MS
+                    encoder.signalEndOfStream()
+                }
+            } else if (state !is RecordingState.Recording && state !is RecordingState.Paused) {
+                break
+            }
+            if (endOfStreamDrained) break
+            if (endOfStreamSignaled && SystemClock.elapsedRealtime() > endOfStreamDeadlineElapsedMs) {
+                Timber.w("End-of-stream drain timed out")
+                break
+            }
 
             if (state is RecordingState.Paused) {
                 // Drain encoder output and discard (don't write to muxer)
@@ -623,7 +644,10 @@ class RecorderService : Service() {
                             drainedOutput = true
                             val (buffer, bufferInfo, bufferIndex) = output
 
-                            if (videoTrackAdded && (bufferInfo.flags and android.media.MediaCodec.BUFFER_FLAG_CODEC_CONFIG) == 0) {
+                            if (videoTrackAdded &&
+                                bufferInfo.size > 0 &&
+                                (bufferInfo.flags and android.media.MediaCodec.BUFFER_FLAG_CODEC_CONFIG) == 0
+                            ) {
                                 val muxerStarted = muxer?.isStarted() == true
                                 val isKeyFrame =
                                     (bufferInfo.flags and android.media.MediaCodec.BUFFER_FLAG_KEY_FRAME) != 0
@@ -640,6 +664,9 @@ class RecorderService : Service() {
                             }
 
                             videoEncoder?.releaseOutputBuffer(bufferIndex)
+                            if ((bufferInfo.flags and android.media.MediaCodec.BUFFER_FLAG_END_OF_STREAM) != 0) {
+                                endOfStreamDrained = true
+                            }
                         }
 
                         is VideoEncoder.EncoderOutput.TryAgain -> {
@@ -923,10 +950,12 @@ class RecorderService : Service() {
         cleanupJob = serviceScope.launch(Dispatchers.IO) {
             startJob?.cancelAndJoin()
             startJob = null
-            recordingJob?.cancelAndJoin()
-            recordingJob = null
             audioJob?.cancelAndJoin()
             audioJob = null
+            // Recording loop flushes buffered encoder frames after EOS, then exits.
+            withTimeoutOrNull(RECORDING_JOB_GRACE_MS) { recordingJob?.join() }
+            recordingJob?.cancelAndJoin()
+            recordingJob = null
 
             // Heavy cleanup must finish even if the service is being destroyed.
             withContext(NonCancellable) {
@@ -948,10 +977,6 @@ class RecorderService : Service() {
                 pauseStartTime = 0L
 
                 try {
-                    // Signal end of stream
-                    currentVideoEncoder?.signalEndOfStream()
-                    delay(100.milliseconds) // Ensure last frames are written
-
                     // Release resources
                     currentMuxer?.release()
                     currentVideoEncoder?.release()
